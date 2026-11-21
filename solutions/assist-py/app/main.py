@@ -2,19 +2,37 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import os
 import httpx
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 app = FastAPI(title="Personal Assistant")
 
 OWNER = os.getenv("APP_OWNER", "anonymous")
 SECRET_KEY = os.getenv("APP_SECRET", "default_secret")
 
+# --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# Берем URL из окружения (который мы передаем через Docker)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./notes.db")
+
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Модель таблицы для заметок
+class NoteDB(Base):
+    __tablename__ = "notes"
+    id = Column(Integer, primary_key=True, index=True)
+    text = Column(String, index=True)
+
+# Создаем таблицы в базе данных при запуске приложения
+Base.metadata.create_all(bind=engine)
+# -----------------------------
 
 class Note(BaseModel):
     text: str
-
-
-notes: list[str] = []
-
 
 @app.get("/")
 async def root():
@@ -25,11 +43,9 @@ async def root():
         "endpoints": ["/me", "/notes", "/weather/{city}", "/secret/{key}"],
     }
 
-
 @app.get("/health")
 async def health():
     return {"status": "healthy", "owner": OWNER}
-
 
 @app.get("/me")
 async def me():
@@ -40,10 +56,8 @@ async def me():
         else "NOT_SET",
     }
 
-
 @app.get("/secret/{key}")
 async def secret(key: str):
-    """Secret endpoint - checking environment variables"""
     if key == SECRET_KEY:
         return {
             "flag": f"LAB2_SUCCESS_{OWNER.upper()}",
@@ -54,7 +68,6 @@ async def secret(key: str):
         "hint": "Check the APP_SECRET environment variable",
     }
 
-
 WEATHER_CODES: dict[int, str] = {
     0: "☀️ Ясно", 1: "🌤 Малооблачно", 2: "⛅ Переменная облачность",
     3: "☁️ Пасмурно", 45: "🌫 Туман", 48: "🌫 Изморозь",
@@ -64,7 +77,6 @@ WEATHER_CODES: dict[int, str] = {
     80: "🌦 Ливень", 81: "🌧 Сильный ливень", 82: "⛈ Штормовой ливень",
     95: "⛈ Гроза", 96: "⛈ Гроза с градом", 99: "⛈ Сильная гроза с градом",
 }
-
 
 @app.get("/weather/{city}")
 async def weather(city: str):
@@ -109,14 +121,24 @@ async def weather(city: str):
     except Exception as e:
         return {"error": f"Failed to get weather: {type(e).__name__}: {e}"}
 
-
+# --- НОВЫЕ ЭНДПОИНТЫ ДЛЯ ЗАМЕТОК (С БАЗОЙ ДАННЫХ) ---
 @app.post("/notes")
 async def create_note(note: Note):
-    notes.append(note.text)
-    return {"status": "saved", "note_id": len(notes) - 1, "total": len(notes)}
-
+    db = SessionLocal()
+    try:
+        new_note = NoteDB(text=note.text)
+        db.add(new_note)
+        db.commit()
+        db.refresh(new_note)
+        return {"status": "saved", "note_id": new_note.id}
+    finally:
+        db.close()
 
 @app.get("/notes")
 async def list_notes():
-    return {"notes": notes, "count": len(notes)}
-
+    db = SessionLocal()
+    try:
+        notes = db.query(NoteDB).all()
+        return {"notes": [n.text for n in notes], "count": len(notes)}
+    finally:
+        db.close()
