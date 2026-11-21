@@ -1,0 +1,18 @@
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+COPY requirements.txt . 
+RUN pip install --no-cache-dir --prefix=/gasparyan -r requirements.txt
+
+FROM python:3.11-slim AS runner
+
+LABEL maintainer="gasparyan@lab.local"
+LABEL version="2.0"
+
+WORKDIR /app
+ENV PORT=5450
+COPY --from=builder /gasparyan /usr/local
+COPY app/ ./app/
+EXPOSE ${PORT}
+
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
