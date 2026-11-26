@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  APP_OWNER: "gasparian"
+  REDIS_URL: "redis://redis-service:6390/0"
+  CACHE_TTL: "300"
+  DATABASE_URL: "postgresql+psycopg2://appuser:secret20gasparian@postgres-service:5450/assistant_20"

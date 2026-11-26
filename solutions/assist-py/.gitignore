@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 venv/
 .env
+k8s/app/app-secret.yaml
