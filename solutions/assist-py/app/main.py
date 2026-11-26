@@ -1,11 +1,17 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import os
+import json
+import redis
 import httpx
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 app = FastAPI(title="Personal Assistant")
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CACHE_TTL = int(os.getenv("CACHE_TTL", "120"))
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 OWNER = os.getenv("APP_OWNER", "anonymous")
 SECRET_KEY = os.getenv("APP_SECRET", "default_secret")
@@ -78,8 +84,25 @@ WEATHER_CODES: dict[int, str] = {
     95: "⛈ Гроза", 96: "⛈ Гроза с градом", 99: "⛈ Сильная гроза с градом",
 }
 
+@app.get("/cache/stats")
+async def cache_stats():
+    keys = redis_client.keys(f"weather:{OWNER}:*")
+    return {
+        "owner": OWNER,
+        "ttl_seconds": CACHE_TTL,
+        "cached_count": len(keys),
+        "cached_cities": sorted(k.split(":")[-1] for k in keys),
+    }
+
 @app.get("/weather/{city}")
 async def weather(city: str):
+    cache_key = f"weather:{OWNER}:{city.lower()}"
+
+    cached = redis_client.get(cache_key)
+    if cached:
+        data = json.loads(cached)
+        data["source"] = "cache" 
+        return data
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             geo_resp = await client.get(
@@ -109,7 +132,7 @@ async def weather(city: str):
 
             code = weather_data.get("weather_code", -1)
 
-            return {
+            result = {
                 "city": city_name,
                 "country": country,
                 "coordinates": {"lat": lat, "lon": lon},
@@ -117,7 +140,11 @@ async def weather(city: str):
                 "humidity_pct": weather_data["relative_humidity_2m"],
                 "wind_km_h": weather_data["wind_speed_10m"],
                 "condition": WEATHER_CODES.get(code, f"Code {code}"),
+                "source": "api"
             }
+            redis_client.setex(cache_key, CACHE_TTL, json.dumps(result))
+
+            return result
     except Exception as e:
         return {"error": f"Failed to get weather: {type(e).__name__}: {e}"}
 
